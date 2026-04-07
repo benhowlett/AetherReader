@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { ReactReader } from 'react-reader';
 import axios from 'axios';
 import { EBookMetadata, ReadingProgress } from '@aetherreader/shared';
+import { PdfReader } from './PdfReader';
+import { MobiReader } from './MobiReader';
 
 interface ReaderProps {
   book: EBookMetadata;
@@ -62,10 +64,30 @@ export function Reader({ book, onBack }: ReaderProps) {
       );
     }
 
+    if (ext === 'pdf') {
+      return (
+        <PdfReader
+          url={streamUrl}
+          initialPage={location}
+          onPageChange={saveProgress}
+        />
+      );
+    }
+
+    if (ext === 'mobi' || ext === 'azw3') {
+      return (
+        <MobiReader
+          url={streamUrl}
+          initialPosition={location}
+          onProgressChange={saveProgress}
+        />
+      );
+    }
+
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
         <h2>Unsupported Format: {ext}</h2>
-        <p>Currently only EPUB is supported. PDF and MOBI support coming soon!</p>
+        <p>Currently only EPUB, PDF, and MOBI/AZW3 are supported.</p>
       </div>
     );
   };
