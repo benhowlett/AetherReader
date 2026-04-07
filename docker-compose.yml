@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  aetherreader:
+    build: .
+    container_name: aetherreader
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - NEXTCLOUD_URL=${NEXTCLOUD_URL}
+      - NEXTCLOUD_USERNAME=${NEXTCLOUD_USERNAME}
+      - NEXTCLOUD_PASSWORD=${NEXTCLOUD_PASSWORD}
+      - PORT=3001
+      - DB_PATH=/data/sqlite.db
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
