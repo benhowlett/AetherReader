@@ -1,16 +1,14 @@
-# Stage 1: Build packages/shared
+# Stage 1: Build
 FROM node:20-slim AS builder
 WORKDIR /app
-COPY package*.json ./
-COPY tsconfig.base.json ./
-COPY packages/shared ./packages/shared
-COPY apps/web ./apps/web
-COPY apps/api ./apps/api
 
-# Install dependencies using workspaces
+# Copy the whole project for context (needed for monorepo/workspaces)
+COPY . .
+
+# Install all dependencies (handles workspaces)
 RUN npm ci
 
-# Build shared package
+# Build shared package first
 WORKDIR /app/packages/shared
 RUN npm run build
 
@@ -26,27 +24,29 @@ RUN npm run build
 FROM node:20-slim
 WORKDIR /app
 
-# Install production dependencies only
-COPY package*.json ./
-COPY packages/shared/package*.json ./packages/shared/
-COPY apps/api/package*.json ./apps/api/
+# Set production environment
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV DB_PATH=/data/sqlite.db
+
+# Install ONLY production dependencies across the workspace
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/packages/shared/package*.json ./packages/shared/
+COPY --from=builder /app/apps/api/package*.json ./apps/api/
+COPY --from=builder /app/apps/web/package*.json ./apps/web/
+
 RUN npm ci --omit=dev --workspace=@aetherreader/api --workspace=@aetherreader/shared
 
-# Copy built artifacts
+# Copy built artifacts and shared library
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/apps/web/dist ./apps/web/dist
-
-# Environment variables
-ENV PORT=3001
-ENV NODE_ENV=production
-ENV DB_PATH=/data/sqlite.db
 
 # Ensure data directory exists for persistence
 RUN mkdir -p /data
 
 EXPOSE 3001
 
-# Start the API (which will serve the static web files)
+# Start the API (which serves static web files in production)
 WORKDIR /app/apps/api
 CMD ["node", "dist/index.js"]
