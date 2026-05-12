@@ -9,6 +9,8 @@
         // Tailwind config to enable dark mode class
         tailwind.config = { darkMode: 'class' }
     </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/epub.js/0.3.88/epub.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 </head>
 <body :class="{ 'dark': isDarkMode }" class="bg-white dark:bg-gray-900 text-black dark:text-white">
     <div id="app" class="container mx-auto p-4">
@@ -71,6 +73,18 @@
                 </li>
             </ul>
         </div>
+        <div v-if="currentlyReading" class="fixed inset-0 z-50 bg-white dark:bg-gray-900 flex flex-col">
+            <div class="p-4 border-b flex justify-between items-center">
+                <button @click="closeReader" class="text-blue-500">← Back to Library</button>
+                <span class="font-bold">{{ currentlyReading.name }}</span>
+                <div class="space-x-4">
+                    <button @click="prevPage">Prev</button>
+                    <button @click="nextPage">Next</button>
+                </div>
+            </div>
+            
+            <div id="viewer" class="flex-grow overflow-hidden"></div>
+        </div>
     </div>
 
     <script>
@@ -123,6 +137,31 @@
                     // Save the folder path to the SQLite DB via a new POST route
                     console.log("Setting library to:", folder.path);
                     alert(`Success! AetherReader will now sync with: ${folder.name}`);
+                }
+                async openBook(item) {
+                    this.currentlyReading = item;
+                    const bookUrl = `/api/proxy-book?path=${encodeURIComponent(item.path)}`;
+                    
+                    if (item.name.endsWith('.epub')) {
+                        this.rendition = ePub(bookUrl).renderTo("viewer", {
+                            width: "100%",
+                            height: "100%",
+                            flow: "paginated"
+                        });
+                        
+                        // Load saved progress from your SQLite DB
+                        const savedLocation = await this.getSavedProgress(item.path);
+                        this.rendition.display(savedLocation);
+
+                        // Track progress as you read
+                        this.rendition.on("relocated", (location) => {
+                            this.saveProgress(item.path, location.start.cfi);
+                        });
+                    }
+                },
+                closeReader() {
+                    if (this.rendition) this.rendition.destroy();
+                    this.currentlyReading = null;
                 }
             }
         }).mount('#app')

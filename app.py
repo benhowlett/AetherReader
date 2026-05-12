@@ -1,7 +1,7 @@
-from flask import Flask, render_template, request, session, jsonify
+from flask import Flask, render_template, request, session, jsonify, Response, stream_with_context
 from models import db, User, Credential
 from passkey_utils import server, get_registration_options
-import json
+import json, requests
 from cloud_services import setup_oauth
 
 app = Flask(__name__)
@@ -70,6 +70,21 @@ def browse_cloud():
     files = bridge.list_folders(path)
     
     return jsonify(files)
+
+@app.route('/api/proxy-book')
+def proxy_book():
+    file_path = request.args.get('path')
+    token = session.get('cloud_token')
+    provider = session.get('cloud_provider')
+    
+    bridge = CloudBridge(token, provider, os.getenv('NEXTCLOUD_INSTANCE_URL'))
+    external_response = bridge.get_book_content(file_path)
+    
+    # We stream the content back to your browser immediately
+    return Response(
+        stream_with_context(external_response.iter_content(chunk_size=4096)),
+        content_type=external_response.headers.get('Content-Type')
+    )
 
 if __name__ == '__main__':
     # On your Mac, use 'ssl_context' because WebAuthn requires HTTPS

@@ -1,5 +1,4 @@
-import requests
-import os
+import requests, os, io
 import xml.etree.ElementTree as ET
 
 class CloudBridge:
@@ -7,6 +6,7 @@ class CloudBridge:
         self.token = token
         self.provider = provider
         self.instance_url = instance_url
+        self.headers = {'Authorization': f'Bearer {token}'}
 
     def list_folders(self, path="/"):
         if self.provider == 'nextcloud':
@@ -38,3 +38,47 @@ class CloudBridge:
                 "is_folder": is_dir
             })
         return items[1:] # Skip the first item as it's the folder itself
+    
+    def get_book_content(self, file_id_or_path):
+        """Fetches the actual file data for the reader"""
+        if self.provider == 'nextcloud':
+            url = f"{self.instance_url}/remote.php/dav/files/{os.getenv('NEXTCLOUD_USER')}{file_id_or_path}"
+            return requests.get(url, headers=self.headers, stream=True)
+
+        elif self.provider == 'google':
+            # Google uses File IDs rather than paths
+            url = f"https://www.googleapis.com/drive/v3/files/{file_id_or_path}?alt=media"
+            return requests.get(url, headers=self.headers, stream=True)
+
+        elif self.provider == 'dropbox':
+            # Dropbox uses a separate content URL for downloading
+            url = "https://content.dropboxapi.com/2/files/download"
+            headers = {
+                **self.headers,
+                'Dropbox-API-Arg': json.dumps({"path": file_id_or_path})
+            }
+            return requests.post(url, headers=headers, stream=True)
+        
+    def list_files(self, folder_id_or_path):
+        """Lists only folders (for selection) or only books (for the library)"""
+        if self.provider == 'google':
+            # Query for items inside the specific folder that are either folders or ebooks
+            query = f"'{folder_id_or_path}' in parents and (mimeType = 'application/vnd.google-apps.folder' or name contains '.epub' or name contains '.pdf')"
+            url = f"https://www.googleapis.com/drive/v3/files?q={query}&fields=files(id, name, mimeType)"
+            res = requests.get(url, headers=self.headers).json()
+            return [{
+                "name": f['name'],
+                "path": f['id'],
+                "is_folder": f['mimeType'] == 'application/vnd.google-apps.folder'
+            } for f in res.get('files', [])]
+
+        elif self.provider == 'dropbox':
+            url = "https://api.dropboxapi.com/2/files/list_folder"
+            data = {"path": "" if folder_id_or_path == "/" else folder_id_or_path}
+            res = requests.post(url, headers=self.headers, json=data).json()
+            return [{
+                "name": f['name'],
+                "path": f['path_lower'],
+                "is_folder": f['.tag'] == 'folder'
+            } for f in res.get('entries', [])]
+    
