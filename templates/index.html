@@ -29,14 +29,22 @@
             <p>Welcome back! Your library is loading...</p>
         </div>
 
-        <div v-if="isLoggedIn">
-            <h2 class="text-xl mb-4">Connect your Library</h2>
-            <div class="grid grid-cols-2 gap-4">
-                <a href="/login/google" class="p-4 border rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center">
-                    Connect Google Drive
+        <div v-if="isLoggedIn" class="mt-8">
+            <h2 class="text-xl font-semibold mb-4">Connect Your Primary Library</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <a href="/login/nextcloud" class="p-6 border-2 border-blue-500 rounded-lg hover:bg-blue-50 dark:hover:bg-gray-800 transition flex flex-col items-center">
+                    <span class="text-3xl mb-2">☁️</span>
+                    <span>Nextcloud</span>
                 </a>
-                <a href="/login/dropbox" class="p-4 border rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center">
-                    Connect Dropbox
+
+                <a href="/login/google" class="p-6 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition flex flex-col items-center">
+                    <span class="text-3xl mb-2">📁</span>
+                    <span>Google Drive</span>
+                </a>
+
+                <a href="/login/dropbox" class="p-6 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition flex flex-col items-center">
+                    <span class="text-3xl mb-2">📦</span>
+                    <span>Dropbox</span>
                 </a>
             </div>
         </div>
