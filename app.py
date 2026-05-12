@@ -2,11 +2,13 @@ from flask import Flask, render_template, request, session, jsonify
 from models import db, User, Credential
 from passkey_utils import server, get_registration_options
 import json
+from cloud_services import setup_oauth
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///aetherreader.db'
 app.config['SECRET_KEY'] = os.urandom(24) # Needed for sessions
 db.init_app(app)
+oauth = setup_oauth(app)
 
 with app.app_context():
     db.create_all()
@@ -34,6 +36,27 @@ def verify_registration():
     # Here we would verify the 'attestation' sent back by the browser
     # and save the Public Key to the Credential table.
     return jsonify({"status": "success"})
+
+@app.route('/login/<name>')
+def cloud_login(name):
+    client = oauth.create_client(name)
+    redirect_uri = url_for('authorize', name=name, _external=True)
+    return client.authorize_redirect(redirect_uri)
+
+@app.route('/authorize/<name>')
+def authorize(name):
+    client = oauth.create_client(name)
+    token = client.authorize_access_token()
+    # Save this token in the SQLite database associated with the user
+    # For now, we'll store it in the session to test
+    session['cloud_token'] = token
+    return 'Cloud storage connected! You can now select your book folder.'
+
+@app.route('/list-folders')
+def list_folders():
+    # This logic will call the Google/Dropbox API to list folders 
+    # so the user can choose where their library lives.
+    pass
 
 if __name__ == '__main__':
     # On your Mac, use 'ssl_context' because WebAuthn requires HTTPS
