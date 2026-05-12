@@ -44,8 +44,25 @@
                     this.isDarkMode = !this.isDarkMode;
                 },
                 async loginWithPasskey() {
-                    // We will implement the WebAuthn API calls here
-                    alert("Ready to implement Passkey handshake!");
+                    const username = prompt("Enter a username:");
+                    
+                    // 1. Get options from our Flask server
+                    const response = await fetch('/generate-registration-options', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ username })
+                    });
+                    const options = await response.json();
+
+                    // 2. Trigger the native Mac/browser Passkey prompt
+                    // This will pop up the Touch ID / Password prompt on your Mac
+                    const credential = await navigator.credentials.create({
+                        publicKey: options
+                    });
+
+                    // 3. Send the result back to Flask to verify and save
+                    console.log("Credential created:", credential);
+                    alert("Passkey generated on your device!");
                 }
             }
         }).mount('#app')
