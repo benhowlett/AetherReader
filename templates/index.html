@@ -28,6 +28,18 @@
         <div v-else>
             <p>Welcome back! Your library is loading...</p>
         </div>
+
+        <div v-if="isLoggedIn">
+            <h2 class="text-xl mb-4">Connect your Library</h2>
+            <div class="grid grid-cols-2 gap-4">
+                <a href="/login/google" class="p-4 border rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center">
+                    Connect Google Drive
+                </a>
+                <a href="/login/dropbox" class="p-4 border rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center">
+                    Connect Dropbox
+                </a>
+            </div>
+        </div>
     </div>
 
     <script>
