@@ -48,6 +48,29 @@
                 </a>
             </div>
         </div>
+
+        <div v-if="isConnected" class="mt-8 bg-gray-50 dark:bg-gray-800 p-6 rounded-xl shadow-inner">
+            <h3 class="text-lg font-bold mb-4">Select your Library Folder</h3>
+            
+            <nav class="text-sm mb-4 text-blue-500">
+                <span @click="navigateTo('/')" class="cursor-pointer hover:underline">Root</span>
+                <span v-for="seg in currentPathSegments"> / {{ seg }}</span>
+            </nav>
+
+            <ul class="divide-y divide-gray-200 dark:divide-gray-700 border rounded-lg overflow-hidden">
+                <li v-for="item in files" :key="item.path" 
+                    @click="handleItemClick(item)"
+                    class="p-4 hover:bg-white dark:hover:bg-gray-700 cursor-pointer flex justify-between items-center">
+                    <div class="flex items-center">
+                        <span class="mr-3">{{ item.is_folder ? '📁' : '📖' }}</span>
+                        <span>{{ item.name }}</span>
+                    </div>
+                    <button v-if="item.is_folder" @click.stop="setAsLibrary(item)" class="text-xs bg-green-500 text-white px-2 py-1 rounded">
+                        Select This Folder
+                    </button>
+                </li>
+            </ul>
+        </div>
     </div>
 
     <script>
@@ -83,6 +106,23 @@
                     // 3. Send the result back to Flask to verify and save
                     console.log("Credential created:", credential);
                     alert("Passkey generated on your device!");
+                },
+                async fetchFiles(path = '/') {
+                    const response = await fetch(`/api/browse?path=${encodeURIComponent(path)}`);
+                    this.files = await response.json();
+                },
+                handleItemClick(item) {
+                    if (item.is_folder) {
+                        this.fetchFiles(item.path);
+                    } else {
+                        // If it's a book, maybe show a preview?
+                        alert("You clicked a book: " + item.name);
+                    }
+                },
+                setAsLibrary(folder) {
+                    // Save the folder path to the SQLite DB via a new POST route
+                    console.log("Setting library to:", folder.path);
+                    alert(`Success! AetherReader will now sync with: ${folder.name}`);
                 }
             }
         }).mount('#app')

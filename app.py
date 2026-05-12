@@ -58,6 +58,19 @@ def list_folders():
     # so the user can choose where their library lives.
     pass
 
+@app.route('/api/browse')
+def browse_cloud():
+    # In a real app, you'd get the token/provider from the DB based on the logged-in user
+    token = session.get('cloud_token')
+    provider = session.get('cloud_provider') 
+    instance_url = os.getenv('NEXTCLOUD_INSTANCE_URL') if provider == 'nextcloud' else None
+    
+    bridge = CloudBridge(token, provider, instance_url)
+    path = request.args.get('path', '/')
+    files = bridge.list_folders(path)
+    
+    return jsonify(files)
+
 if __name__ == '__main__':
     # On your Mac, use 'ssl_context' because WebAuthn requires HTTPS
     app.run(debug=True, port=5000, ssl_context='adhoc')
