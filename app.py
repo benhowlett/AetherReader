@@ -10,7 +10,9 @@ from cloud_services import setup_oauth
 from cloud_bridge import CloudBridge
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///aetherreader.db'
+# Use absolute path for SQLite to avoid issues with Gunicorn workers
+db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'aetherreader.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key')
 
 # Production Session Security
@@ -18,13 +20,16 @@ app.config.update(
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_PERMANENT=True,
+    PERMANENT_SESSION_LIFETIME=2592000, # 30 days
+    PREFERRED_URL_SCHEME='https'
 )
 
 db.init_app(app)
 oauth = setup_oauth(app)
 
 with app.app_context():
-    # Schema is now stable for this phase, so we remove drop_all()
+    print(f"DEBUG: Using database at {db_path}")
     db.create_all()
 
 @app.route('/')

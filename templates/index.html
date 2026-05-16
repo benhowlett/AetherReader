@@ -36,23 +36,23 @@
             <p>Welcome back! Your library is loading...</p>
         </div>
 
-        <div v-if="isLoggedIn" class="mt-8">
+        <div v-if="isLoggedIn && !isConnected" class="mt-8">
             <h2 class="text-xl font-semibold mb-4">Connect Your Primary Library</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <a href="/login/nextcloud" class="p-6 border-2 border-blue-500 rounded-lg hover:bg-blue-50 dark:hover:bg-gray-800 transition flex flex-col items-center">
+                <button @click="connectCloud('nextcloud')" class="p-6 border-2 border-blue-500 rounded-lg hover:bg-blue-50 dark:hover:bg-gray-800 transition flex flex-col items-center">
                     <span class="text-3xl mb-2">☁️</span>
                     <span>Nextcloud</span>
-                </a>
+                </button>
 
-                <a href="/login/google" class="p-6 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition flex flex-col items-center">
+                <button @click="connectCloud('google')" class="p-6 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition flex flex-col items-center">
                     <span class="text-3xl mb-2">📁</span>
                     <span>Google Drive</span>
-                </a>
+                </button>
 
-                <a href="/login/dropbox" class="p-6 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition flex flex-col items-center">
+                <button @click="connectCloud('dropbox')" class="p-6 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition flex flex-col items-center">
                     <span class="text-3xl mb-2">📦</span>
                     <span>Dropbox</span>
-                </a>
+                </button>
             </div>
         </div>
 
@@ -128,6 +128,13 @@
                 async logout() {
                     await fetch('/api/logout', { method: 'POST' });
                     window.location.reload();
+                },
+                connectCloud(provider) {
+                    const width = 600;
+                    const height = 700;
+                    const left = (window.screen.width / 2) - (width / 2);
+                    const top = (window.screen.height / 2) - (height / 2);
+                    window.open(`/login/${provider}`, 'ConnectCloud', `width=${width},height=${height},top=${top},left=${left}`);
                 },
                 async loginWithPasskey() {
                     const username = prompt("Enter your username:");
