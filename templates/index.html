@@ -17,9 +17,13 @@
     <div id="app" class="container mx-auto p-4">
         <header class="flex justify-between items-center py-6">
             <h1 class="text-2xl font-bold">AetherReader</h1>
-            <button @click="toggleDarkMode" class="p-2 border rounded">
-                {{ isDarkMode ? 'Light Mode' : 'Dark Mode' }}
-            </button>
+            <div class="flex items-center space-x-4">
+                <span v-if="isLoggedIn" class="text-sm text-gray-500">Logged in as: <strong>{{ username }}</strong></span>
+                <button v-if="isLoggedIn" @click="logout" class="text-sm text-red-500 hover:underline">Logout</button>
+                <button @click="toggleDarkMode" class="p-2 border rounded">
+                    {{ isDarkMode ? 'Light Mode' : 'Dark Mode' }}
+                </button>
+            </div>
         </header>
 
         <div v-if="!isLoggedIn">
@@ -97,62 +101,98 @@
                     isDarkMode: true,
                     isLoggedIn: false,
                     isConnected: false,
+                    username: '',
                     files: [],
                     currentPathSegments: [],
                     currentlyReading: null,
                     rendition: null
                 }
             },
+            async mounted() {
+                // Check if already logged in
+                const response = await fetch('/api/user-status');
+                const data = await response.json();
+                if (data.isLoggedIn) {
+                    this.isLoggedIn = true;
+                    this.username = data.username;
+                    this.isConnected = data.isConnected;
+                    if (this.isConnected) {
+                        this.fetchFiles();
+                    }
+                }
+            },
             methods: {
                 toggleDarkMode() {
                     this.isDarkMode = !this.isDarkMode;
                 },
+                async logout() {
+                    await fetch('/api/logout', { method: 'POST' });
+                    window.location.reload();
+                },
                 async loginWithPasskey() {
-                    const username = prompt("Enter a username:");
+                    const username = prompt("Enter your username:");
                     if (!username) return;
                     
                     try {
-                        // 1. Get options from Flask
-                        const response = await fetch('/generate-registration-options', {
+                        // 1. Get auth options (Register or Login)
+                        const response = await fetch('/api/auth-options', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify({ username })
                         });
-                        const options = await response.json();
-                        console.log("Registration Options:", options);
+                        const authData = await response.json();
+                        const { type, options } = authData;
 
-                        // Convert base64url to Uint8Array for the browser
-                        if (options.challenge) options.challenge = this.bufferDecode(options.challenge);
-                        if (options.user && options.user.id) options.user.id = this.bufferDecode(options.user.id);
-                        if (options.excludeCredentials) {
-                            options.excludeCredentials.forEach(c => {
-                                if (c.id) c.id = this.bufferDecode(c.id);
+                        if (type === 'registration') {
+                            // --- REGISTRATION FLOW ---
+                            options.challenge = this.bufferDecode(options.challenge);
+                            options.user.id = this.bufferDecode(options.user.id);
+                            if (options.excludeCredentials) {
+                                options.excludeCredentials.forEach(c => c.id = this.bufferDecode(c.id));
+                            }
+
+                            const credential = await navigator.credentials.create({ publicKey: options });
+
+                            const verifyRes = await fetch('/verify-registration', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify(this.credentialToJSON(credential))
                             });
-                        }
 
-                        // 2. Create Credential
-                        console.log("Calling navigator.credentials.create...");
-                        const credential = await navigator.credentials.create({
-                            publicKey: options
-                        });
-                        console.log("Credential created:", credential);
-
-                        // 3. Send back to Flask to verify
-                        const verifyResponse = await fetch('/verify-registration', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify(this.credentialToJSON(credential))
-                        });
-
-                        const result = await verifyResponse.json();
-                        if (verifyResponse.ok && result.status === 'success') {
-                            alert("Registration successful!");
-                            this.isLoggedIn = true;
+                            if (verifyRes.ok) {
+                                alert("Registration successful!");
+                                this.isLoggedIn = true;
+                                this.username = username;
+                            }
                         } else {
-                            alert("Registration failed: " + (result.message || "Unknown error"));
+                            // --- LOGIN FLOW ---
+                            options.challenge = this.bufferDecode(options.challenge);
+                            if (options.allowCredentials) {
+                                options.allowCredentials.forEach(c => c.id = this.bufferDecode(c.id));
+                            }
+
+                            const assertion = await navigator.credentials.get({ publicKey: options });
+
+                            const verifyRes = await fetch('/verify-login', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify(this.credentialToJSON(assertion))
+                            });
+
+                            if (verifyRes.ok) {
+                                this.isLoggedIn = true;
+                                this.username = username;
+                                // Check if connected after login
+                                const statusRes = await fetch('/api/user-status');
+                                const statusData = await statusRes.json();
+                                this.isConnected = statusData.isConnected;
+                                if (this.isConnected) this.fetchFiles();
+                            } else {
+                                alert("Login failed.");
+                            }
                         }
                     } catch (err) {
-                        console.error("Passkey Error:", err);
+                        console.error("Auth Error:", err);
                         alert("Error: " + err.message);
                     }
                 },

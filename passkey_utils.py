@@ -49,6 +49,19 @@ def get_authentication_options(credentials):
     auth_data, state = server.authenticate_begin(credentials)
     return auth_data, state
 
+def authentication_options_to_dict(options):
+    """Serializes authentication options to a JSON-friendly dict"""
+    pk = options.public_key
+    return {
+        "challenge": websafe_encode(pk.challenge),
+        "timeout": pk.timeout,
+        "rpId": pk.rp_id,
+        "allowCredentials": [
+            {"type": c.type, "id": websafe_encode(c.id)} for c in pk.allow_credentials
+        ] if pk.allow_credentials else [],
+        "userVerification": pk.user_verification
+    }
+
 def verify_registration_response(state, response):
     """Verifies the attestation from the browser and returns the credential"""
     return server.register_complete(state, response)

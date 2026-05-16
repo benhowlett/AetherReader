@@ -12,6 +12,14 @@ from cloud_bridge import CloudBridge
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///aetherreader.db'
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key')
+
+# Production Session Security
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
+
 db.init_app(app)
 oauth = setup_oauth(app)
 
@@ -23,23 +31,45 @@ with app.app_context():
 def index():
     return render_template('index.html')
 
-@app.route('/generate-registration-options', methods=['POST'])
-def generate_registration():
+@app.route('/api/auth-options', methods=['POST'])
+def auth_options():
     username = request.json.get('username')
     user = User.query.filter_by(username=username).first()
+    
     if not user:
+        # User doesn't exist, create one and return registration options
         user = User(username=username)
         db.session.add(user)
         db.session.commit()
-
-    options, state = get_registration_options(user.id, user.username)
-    session['registration_state'] = state
-    session['registering_user_id'] = user.id
+        
+        options, state = get_registration_options(user.id, user.username)
+        session['registration_state'] = state
+        session['registering_user_id'] = user.id
+        from passkey_utils import registration_options_to_dict
+        return jsonify({"type": "registration", "options": registration_options_to_dict(options)})
     
-    from passkey_utils import registration_options_to_dict
-    output = registration_options_to_dict(options)
-    print(f"DEBUG: Registration Options: {output}")
-    return jsonify(output)
+    # User exists, check if they have credentials
+    user_creds = Credential.query.filter_by(user_id=user.id).all()
+    if not user_creds:
+        # Exists but no passkey, return registration options
+        options, state = get_registration_options(user.id, user.username)
+        session['registration_state'] = state
+        session['registering_user_id'] = user.id
+        from passkey_utils import registration_options_to_dict
+        return jsonify({"type": "registration", "options": registration_options_to_dict(options)})
+
+    # Return login options
+    from fido2.webauthn import PublicKeyCredentialDescriptor
+    allowed_credentials = [
+        PublicKeyCredentialDescriptor(type="public-key", id=c.credential_id)
+        for c in user_creds
+    ]
+    
+    from passkey_utils import get_authentication_options, authentication_options_to_dict
+    options, state = get_authentication_options(allowed_credentials)
+    session['login_state'] = state
+    session['logging_in_user_id'] = user.id
+    return jsonify({"type": "login", "options": authentication_options_to_dict(options)})
 
 @app.route('/verify-registration', methods=['POST'])
 def verify_registration():
@@ -59,8 +89,6 @@ def verify_registration():
         
         from fido2 import cbor
         pub_key_bytes = cbor.encode(cred_data.public_key)
-        print(f"DEBUG: Public Key Type: {type(cred_data.public_key)}")
-        print(f"DEBUG: Public Key Bytes: {pub_key_bytes.hex()}")
 
         new_cred = Credential(
             user_id=user.id,
@@ -78,32 +106,6 @@ def verify_registration():
         traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)}), 400
 
-@app.route('/generate-login-options', methods=['POST'])
-def generate_login():
-    username = request.json.get('username')
-    user = User.query.filter_by(username=username).first()
-    if not user:
-        return jsonify({"status": "error", "message": "User not found"}), 404
-    
-    from passkey_utils import get_authentication_options
-    credentials = [Credential.query.filter_by(user_id=user.id).all()] # This is wrong, should be fido2 objects
-    # This is getting complicated because of binary data and fido2 objects.
-    # I'll simplify the implementation for now and use placeholders if needed, 
-    # but I want it to be functional.
-    
-    # Actually, let's use the user's saved credentials
-    user_creds = Credential.query.filter_by(user_id=user.id).all()
-    from fido2.webauthn import PublicKeyCredentialDescriptor
-    allowed_credentials = [
-        PublicKeyCredentialDescriptor(type="public-key", id=c.credential_id)
-        for c in user_creds
-    ]
-    
-    options, state = get_authentication_options(allowed_credentials)
-    session['login_state'] = state
-    session['logging_in_user_id'] = user.id
-    return jsonify(dict(options))
-
 @app.route('/verify-login', methods=['POST'])
 def verify_login():
     login_state = session.get('login_state')
@@ -113,10 +115,53 @@ def verify_login():
     
     data = request.json
     user_creds = Credential.query.filter_by(user_id=user_id).all()
-    # fido2 expects the actual credential objects
-    # This is where it gets tricky without a helper to reconstruct fido2 objects from DB
     
-    return jsonify({"status": "success"}) # Placeholder for now until I refine the fido2 object reconstruction
+    from fido2.webauthn import AttestedCredentialData
+    from fido2 import cbor
+    
+    # Reconstruct fido2 credential objects
+    credentials = []
+    for c in user_creds:
+        try:
+            # Reconstruct from the CBOR-encoded public key we saved
+            pub_key = cbor.decode(c.public_key)
+            cred = AttestedCredentialData.create(
+                aaguid=b'\x00'*16, # We didn't save AAGUID, standard for many passkeys
+                credential_id=c.credential_id,
+                public_key=pub_key
+            )
+            credentials.append(cred)
+        except Exception as e:
+            print(f"Error reconstructing credential {c.id}: {e}")
+
+    try:
+        from passkey_utils import verify_authentication_response
+        verify_authentication_response(login_state, credentials, data)
+        session['user_id'] = user_id
+        return jsonify({"status": "success"})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+@app.route('/api/user-status')
+def user_status():
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"isLoggedIn": False})
+    
+    user = User.query.get(user_id)
+    return jsonify({
+        "isLoggedIn": True,
+        "username": user.username,
+        "isConnected": bool(user.cloud_provider),
+        "provider": user.cloud_provider
+    })
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    session.clear()
+    return jsonify({"status": "success"})
 
 @app.route('/login/<name>')
 def cloud_login(name):
@@ -146,9 +191,24 @@ def authorize(name):
 
 @app.route('/list-folders')
 def list_folders():
-    # This logic will call the Google/Dropbox API to list folders 
-    # so the user can choose where their library lives.
-    pass
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    
+    user = User.query.get(user_id)
+    provider = user.cloud_provider
+    if not provider or not user.tokens or provider not in user.tokens:
+        return jsonify([])
+
+    token_obj = user.tokens[provider]
+    access_token = token_obj.get('access_token')
+    instance_url = os.getenv('NEXTCLOUD_INSTANCE_URL') if provider == 'nextcloud' else None
+    
+    bridge = CloudBridge(access_token, provider, instance_url)
+    path = request.args.get('path', '/')
+    # For initial selection, we often want to list folders specifically
+    items = bridge.list_folders(path)
+    return jsonify(items)
 
 @app.route('/api/browse')
 def browse_cloud():
