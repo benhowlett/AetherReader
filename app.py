@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from flask import Flask, render_template, request, session, jsonify, Response, stream_with_context, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db, User, Credential
 from passkey_utils import server, get_registration_options
 import json, requests
@@ -10,6 +11,9 @@ from cloud_services import setup_oauth
 from cloud_bridge import CloudBridge
 
 app = Flask(__name__)
+# Support HTTPS redirects behind Nginx
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
 # Use absolute path for SQLite to avoid issues with Gunicorn workers
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'aetherreader.db')
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
@@ -28,9 +32,42 @@ app.config.update(
 db.init_app(app)
 oauth = setup_oauth(app)
 
+@app.errorhandler(Exception)
+def handle_exception(e):
+    import traceback
+    print(f"ERROR: {str(e)}")
+    traceback.print_exc()
+    return f"An internal error occurred: {str(e)}", 500
+
 with app.app_context():
     print(f"DEBUG: App started. Database path: {db_path}")
     db.create_all()
+    
+    # --- CLEANUP: Merge duplicate users (case-insensitive) ---
+    try:
+        all_users = User.query.all()
+        seen_names = {}
+        for u in all_users:
+            lower_name = u.username.lower()
+            if lower_name in seen_names:
+                original = seen_names[lower_name]
+                print(f"DEBUG: Merging duplicate user '{u.username}' (ID: {u.id}) into ID: {original.id}")
+                for cred in u.credentials:
+                    cred.user_id = original.id
+                if not original.cloud_provider and u.cloud_provider:
+                    original.cloud_provider = u.cloud_provider
+                    original.tokens = u.tokens
+                    original.cloud_folder_id = u.cloud_folder_id
+                db.session.delete(u)
+            else:
+                seen_names[lower_name] = u
+                if u.username != lower_name:
+                    u.username = lower_name
+        db.session.commit()
+    except Exception as e:
+        print(f"DEBUG: Cleanup failed (likely first run): {e}")
+    # ---------------------------------------------------------
+
     user_count = User.query.count()
     cred_count = Credential.query.count()
     print(f"DEBUG: Current DB state: {user_count} users, {cred_count} credentials")
@@ -64,7 +101,6 @@ def auth_options():
         db.session.add(user)
         db.session.commit()
     
-    # Check if they have credentials (using the relationship)
     if not user.credentials:
         print(f"DEBUG: User '{username}' has no credentials. Registration required.")
         options, state = get_registration_options(user.id, user.username)
@@ -74,7 +110,6 @@ def auth_options():
         return jsonify({"type": "registration", "options": registration_options_to_dict(options)})
 
     print(f"DEBUG: User '{username}' found. ID: {user.id}. Credentials: {len(user.credentials)}")
-    # Return login options
     from fido2.webauthn import PublicKeyCredentialDescriptor
     allowed_credentials = [
         PublicKeyCredentialDescriptor(type="public-key", id=c.credential_id)
@@ -94,7 +129,6 @@ def verify_registration():
     if not registration_state or not user_id:
         return jsonify({"status": "error", "message": "No registration state found"}), 400
     
-    # The browser sends back the attestation
     data = request.json
     try:
         from passkey_utils import verify_registration_response
@@ -108,7 +142,7 @@ def verify_registration():
 
         new_cred = Credential(
             user_id=user.id,
-            credential_id=cred_data.credential_id,
+            credential_id=bytes(cred_data.credential_id),
             public_key=pub_key_bytes,
             sign_count=auth_data.counter
         )
@@ -136,14 +170,12 @@ def verify_login():
     from fido2.webauthn import AttestedCredentialData
     from fido2 import cbor
     
-    # Reconstruct fido2 credential objects
     credentials = []
     for c in user.credentials:
         try:
-            # Reconstruct from the CBOR-encoded public key we saved
             pub_key = cbor.decode(c.public_key)
             cred = AttestedCredentialData.create(
-                aaguid=b'\x00'*16, # We didn't save AAGUID, standard for many passkeys
+                aaguid=b'\x00'*16,
                 credential_id=c.credential_id,
                 public_key=pub_key
             )
@@ -183,38 +215,44 @@ def logout():
 
 @app.route('/login/<name>')
 def cloud_login(name):
+    user_id = session.get('user_id')
+    if user_id:
+        session['pre_auth_user_id'] = user_id
+        
     client = oauth.create_client(name)
     redirect_uri = url_for('authorize', name=name, _external=True)
     return client.authorize_redirect(redirect_uri)
 
 @app.route('/authorize/<name>')
 def authorize(name):
-    client = oauth.create_client(name)
-    token = client.authorize_access_token()
-    
-    user_id = session.get('user_id')
-    print(f"DEBUG: Authorize called for {name}. user_id from session: {user_id}")
-    if not user_id:
-        print("DEBUG: Session user_id is missing in authorize!")
-        return "Login session lost. Please close this window and log in again before connecting.", 401
-
-    user = User.query.get(user_id)
-    if not user:
-        return "User not found", 404
+    try:
+        client = oauth.create_client(name)
+        token = client.authorize_access_token()
         
-    # Save token
-    from sqlalchemy.orm.attributes import flag_modified
-    user_tokens = dict(user.tokens or {})
-    user_tokens[name] = token
-    user.tokens = user_tokens
-    flag_modified(user, 'tokens') # Ensure SQLAlchemy sees the change
-    
-    user.cloud_provider = name
-    db.session.commit()
-    print(f"DEBUG: Cloud {name} connected and SAVED for user {user.username}")
+        user_id = session.get('user_id') or session.get('pre_auth_user_id')
+        print(f"DEBUG: Authorize called for {name}. user_id: {user_id}")
+        if not user_id:
+            return "Login session lost. Please close this window and log in again before connecting.", 401
 
-    # Automatically close the OAuth popup if one was used
-    return 'Cloud storage connected! <script>if(window.opener){window.opener.location.reload(); window.close();}</script>'
+        user = User.query.get(user_id)
+        if not user:
+            return "User not found", 404
+            
+        from sqlalchemy.orm.attributes import flag_modified
+        user_tokens = dict(user.tokens or {})
+        user_tokens[name] = token
+        user.tokens = user_tokens
+        flag_modified(user, 'tokens')
+        
+        user.cloud_provider = name
+        db.session.commit()
+        print(f"DEBUG: Cloud {name} connected and SAVED for user {user.username}")
+
+        return 'Cloud storage connected! <script>if(window.opener){window.opener.location.reload(); window.close();}</script>'
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return f"OAuth Error: {str(e)}", 500
 
 @app.route('/api/set-library', methods=['POST'])
 def set_library():
@@ -248,7 +286,6 @@ def list_folders():
     
     bridge = CloudBridge(access_token, provider, instance_url)
     path = request.args.get('path', '/')
-    # For initial selection, we often want to list folders specifically
     items = bridge.list_folders(path)
     return jsonify(items)
 
@@ -298,5 +335,4 @@ def proxy_book():
     )
 
 if __name__ == '__main__':
-    # On your Mac, use 'ssl_context' because WebAuthn requires HTTPS
     app.run(debug=True, port=5000, ssl_context='adhoc')
