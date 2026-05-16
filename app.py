@@ -51,7 +51,10 @@ def index():
 
 @app.route('/api/auth-options', methods=['POST'])
 def auth_options():
-    username = request.json.get('username')
+    username = request.json.get('username', '').lower().strip()
+    if not username:
+        return jsonify({"status": "error", "message": "Username required"}), 400
+        
     print(f"DEBUG: Auth options requested for username: {username}")
     user = User.query.filter_by(username=username).first()
     
@@ -60,28 +63,22 @@ def auth_options():
         user = User(username=username)
         db.session.add(user)
         db.session.commit()
-        
-        options, state = get_registration_options(user.id, user.username)
-        session['registration_state'] = state
-        session['registering_user_id'] = user.id
-        from passkey_utils import registration_options_to_dict
-        return jsonify({"type": "registration", "options": registration_options_to_dict(options)})
     
-    print(f"DEBUG: User '{username}' found. ID: {user.id}. Credentials: {len(user.credentials)}")
-    # User exists, check if they have credentials
+    # Check if they have credentials (using the relationship)
     if not user.credentials:
-        # Exists but no passkey
+        print(f"DEBUG: User '{username}' has no credentials. Registration required.")
         options, state = get_registration_options(user.id, user.username)
         session['registration_state'] = state
         session['registering_user_id'] = user.id
         from passkey_utils import registration_options_to_dict
         return jsonify({"type": "registration", "options": registration_options_to_dict(options)})
 
+    print(f"DEBUG: User '{username}' found. ID: {user.id}. Credentials: {len(user.credentials)}")
     # Return login options
     from fido2.webauthn import PublicKeyCredentialDescriptor
     allowed_credentials = [
         PublicKeyCredentialDescriptor(type="public-key", id=c.credential_id)
-        for c in user_creds
+        for c in user.credentials
     ]
     
     from passkey_utils import get_authentication_options, authentication_options_to_dict
@@ -118,6 +115,7 @@ def verify_registration():
         db.session.add(new_cred)
         db.session.commit()
         
+        session.permanent = True
         session['user_id'] = user.id
         return jsonify({"status": "success"})
     except Exception as e:
@@ -133,14 +131,14 @@ def verify_login():
         return jsonify({"status": "error", "message": "No login state found"}), 400
     
     data = request.json
-    user_creds = Credential.query.filter_by(user_id=user_id).all()
+    user = User.query.get(user_id)
     
     from fido2.webauthn import AttestedCredentialData
     from fido2 import cbor
     
     # Reconstruct fido2 credential objects
     credentials = []
-    for c in user_creds:
+    for c in user.credentials:
         try:
             # Reconstruct from the CBOR-encoded public key we saved
             pub_key = cbor.decode(c.public_key)
@@ -156,6 +154,7 @@ def verify_login():
     try:
         from passkey_utils import verify_authentication_response
         verify_authentication_response(login_state, credentials, data)
+        session.permanent = True
         session['user_id'] = user_id
         return jsonify({"status": "success"})
     except Exception as e:
@@ -196,23 +195,41 @@ def authorize(name):
     user_id = session.get('user_id')
     print(f"DEBUG: Authorize called for {name}. user_id from session: {user_id}")
     if not user_id:
-        return "You must be logged in with a passkey first!", 401
+        print("DEBUG: Session user_id is missing in authorize!")
+        return "Login session lost. Please close this window and log in again before connecting.", 401
 
     user = User.query.get(user_id)
     if not user:
-        print(f"DEBUG: User {user_id} not found in DB during authorize!")
         return "User not found", 404
         
-    # Save token in the tokens JSON column
+    # Save token
+    from sqlalchemy.orm.attributes import flag_modified
     user_tokens = dict(user.tokens or {})
     user_tokens[name] = token
     user.tokens = user_tokens
+    flag_modified(user, 'tokens') # Ensure SQLAlchemy sees the change
+    
     user.cloud_provider = name
     db.session.commit()
-    print(f"DEBUG: Cloud {name} connected for user {user.username}")
+    print(f"DEBUG: Cloud {name} connected and SAVED for user {user.username}")
 
     # Automatically close the OAuth popup if one was used
     return 'Cloud storage connected! <script>if(window.opener){window.opener.location.reload(); window.close();}</script>'
+
+@app.route('/api/set-library', methods=['POST'])
+def set_library():
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    
+    data = request.json
+    folder_id = data.get('folder_id')
+    
+    user = User.query.get(user_id)
+    user.cloud_folder_id = folder_id
+    db.session.commit()
+    
+    return jsonify({"status": "success"})
 
 @app.route('/list-folders')
 def list_folders():
@@ -279,21 +296,6 @@ def proxy_book():
         stream_with_context(external_response.iter_content(chunk_size=4096)),
         content_type=external_response.headers.get('Content-Type')
     )
-
-@app.route('/api/set-library', methods=['POST'])
-def set_library():
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"status": "error", "message": "Unauthorized"}), 401
-    
-    data = request.json
-    folder_id = data.get('folder_id')
-    
-    user = User.query.get(user_id)
-    user.cloud_folder_id = folder_id
-    db.session.commit()
-    
-    return jsonify({"status": "success"})
 
 if __name__ == '__main__':
     # On your Mac, use 'ssl_context' because WebAuthn requires HTTPS
