@@ -42,32 +42,6 @@ def handle_exception(e):
 with app.app_context():
     print(f"DEBUG: App started. Database path: {db_path}")
     db.create_all()
-    
-    # --- CLEANUP: Merge duplicate users (case-insensitive) ---
-    try:
-        all_users = User.query.all()
-        seen_names = {}
-        for u in all_users:
-            lower_name = u.username.lower()
-            if lower_name in seen_names:
-                original = seen_names[lower_name]
-                print(f"DEBUG: Merging duplicate user '{u.username}' (ID: {u.id}) into ID: {original.id}")
-                for cred in u.credentials:
-                    cred.user_id = original.id
-                if not original.cloud_provider and u.cloud_provider:
-                    original.cloud_provider = u.cloud_provider
-                    original.tokens = u.tokens
-                    original.cloud_folder_id = u.cloud_folder_id
-                db.session.delete(u)
-            else:
-                seen_names[lower_name] = u
-                if u.username != lower_name:
-                    u.username = lower_name
-        db.session.commit()
-    except Exception as e:
-        print(f"DEBUG: Cleanup failed (likely first run): {e}")
-    # ---------------------------------------------------------
-
     user_count = User.query.count()
     cred_count = Credential.query.count()
     print(f"DEBUG: Current DB state: {user_count} users, {cred_count} credentials")
@@ -92,7 +66,7 @@ def auth_options():
     if not username:
         return jsonify({"status": "error", "message": "Username required"}), 400
         
-    print(f"DEBUG: Auth options requested for username: {username}")
+    print(f"DEBUG: Auth options requested for username: '{username}'")
     user = User.query.filter_by(username=username).first()
     
     if not user:
@@ -100,20 +74,27 @@ def auth_options():
         user = User(username=username)
         db.session.add(user)
         db.session.commit()
+        print(f"DEBUG: Created user ID: {user.id}")
+    else:
+        print(f"DEBUG: Found user '{username}' (ID: {user.id})")
     
-    if not user.credentials:
-        print(f"DEBUG: User '{username}' has no credentials. Registration required.")
+    # Check credentials using direct query for maximum reliability
+    user_creds = Credential.query.filter_by(user_id=user.id).all()
+    print(f"DEBUG: User {user.id} has {len(user_creds)} credentials in DB")
+    
+    if not user_creds:
+        print(f"DEBUG: Starting REGISTRATION for {user.id}")
         options, state = get_registration_options(user.id, user.username)
         session['registration_state'] = state
         session['registering_user_id'] = user.id
         from passkey_utils import registration_options_to_dict
         return jsonify({"type": "registration", "options": registration_options_to_dict(options)})
 
-    print(f"DEBUG: User '{username}' found. ID: {user.id}. Credentials: {len(user.credentials)}")
+    print(f"DEBUG: Starting LOGIN for {user.id}")
     from fido2.webauthn import PublicKeyCredentialDescriptor
     allowed_credentials = [
         PublicKeyCredentialDescriptor(type="public-key", id=c.credential_id)
-        for c in user.credentials
+        for c in user_creds
     ]
     
     from passkey_utils import get_authentication_options, authentication_options_to_dict
@@ -126,6 +107,7 @@ def auth_options():
 def verify_registration():
     registration_state = session.get('registration_state')
     user_id = session.get('registering_user_id')
+    print(f"DEBUG: verify_registration. user_id: {user_id}")
     if not registration_state or not user_id:
         return jsonify({"status": "error", "message": "No registration state found"}), 400
     
@@ -148,6 +130,7 @@ def verify_registration():
         )
         db.session.add(new_cred)
         db.session.commit()
+        print(f"DEBUG: Saved credential for user {user.id}")
         
         session.permanent = True
         session['user_id'] = user.id
@@ -161,6 +144,7 @@ def verify_registration():
 def verify_login():
     login_state = session.get('login_state')
     user_id = session.get('logging_in_user_id')
+    print(f"DEBUG: verify_login. user_id: {user_id}")
     if not login_state or not user_id:
         return jsonify({"status": "error", "message": "No login state found"}), 400
     
@@ -188,6 +172,7 @@ def verify_login():
         verify_authentication_response(login_state, credentials, data)
         session.permanent = True
         session['user_id'] = user_id
+        print(f"DEBUG: Login successful for user {user_id}")
         return jsonify({"status": "success"})
     except Exception as e:
         import traceback
@@ -201,6 +186,10 @@ def user_status():
         return jsonify({"isLoggedIn": False})
     
     user = User.query.get(user_id)
+    if not user:
+        session.clear()
+        return jsonify({"isLoggedIn": False})
+        
     return jsonify({
         "isLoggedIn": True,
         "username": user.username,
@@ -216,6 +205,7 @@ def logout():
 @app.route('/login/<name>')
 def cloud_login(name):
     user_id = session.get('user_id')
+    print(f"DEBUG: cloud_login. current user_id: {user_id}")
     if user_id:
         session['pre_auth_user_id'] = user_id
         
@@ -230,13 +220,13 @@ def authorize(name):
         token = client.authorize_access_token()
         
         user_id = session.get('user_id') or session.get('pre_auth_user_id')
-        print(f"DEBUG: Authorize called for {name}. user_id: {user_id}")
+        print(f"DEBUG: authorize callback. name: {name}, user_id: {user_id}")
         if not user_id:
             return "Login session lost. Please close this window and log in again before connecting.", 401
 
         user = User.query.get(user_id)
         if not user:
-            return "User not found", 404
+            return f"User {user_id} not found in database.", 404
             
         from sqlalchemy.orm.attributes import flag_modified
         user_tokens = dict(user.tokens or {})
@@ -246,7 +236,7 @@ def authorize(name):
         
         user.cloud_provider = name
         db.session.commit()
-        print(f"DEBUG: Cloud {name} connected and SAVED for user {user.username}")
+        print(f"DEBUG: Cloud {name} connected and SAVED for user {user.id}")
 
         return 'Cloud storage connected! <script>if(window.opener){window.opener.location.reload(); window.close();}</script>'
     except Exception as e:
