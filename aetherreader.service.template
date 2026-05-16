@@ -1,0 +1,22 @@
+[Unit]
+Description=Gunicorn instance to serve AetherReader
+After=network.target
+
+[Service]
+# User and Group that will run the service
+User=youruser
+Group=www-data
+# The path to your project directory
+WorkingDirectory=/path/to/AetherReader
+# The path to your virtual environment's bin folder
+Environment="PATH=/path/to/AetherReader/venv/bin"
+# Load environment variables from .env
+EnvironmentFile=/path/to/AetherReader/.env
+# The command to start Gunicorn
+ExecStart=/path/to/AetherReader/venv/bin/gunicorn -c gunicorn_config.py app:app
+
+# Restart the service if it crashes
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
