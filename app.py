@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-from flask import Flask, render_template, request, session, jsonify, Response, stream_with_context, url_for
+from flask import Flask, render_template, request, session, jsonify, Response, stream_with_context, url_for, redirect
 from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db, User, Credential
 from passkey_utils import server, get_registration_options
@@ -58,6 +58,15 @@ def db_status():
 
 @app.route('/')
 def index():
+    # SELF-HEALING: If an OAuth provider accidentally sends the user here, 
+    # redirect them to the proper authorize route.
+    code = request.args.get('code')
+    state = request.args.get('state')
+    if code and state:
+        provider = session.get('cloud_provider') or 'nextcloud'
+        print(f"DEBUG: Accidental callback to index detected. Redirecting to /authorize/{provider}")
+        return redirect(url_for('authorize', name=provider, **request.args))
+        
     return render_template('index.html')
 
 @app.route('/api/auth-options', methods=['POST'])
@@ -205,12 +214,14 @@ def logout():
 @app.route('/login/<name>')
 def cloud_login(name):
     user_id = session.get('user_id')
-    print(f"DEBUG: cloud_login. current user_id: {user_id}")
+    print(f"DEBUG: cloud_login for {name}. current user_id: {user_id}")
     if user_id:
         session['pre_auth_user_id'] = user_id
-        
+    
+    session['cloud_provider'] = name # Store for self-healing redirect
     client = oauth.create_client(name)
     redirect_uri = url_for('authorize', name=name, _external=True)
+    print(f"DEBUG: Generated redirect_uri: {redirect_uri}")
     return client.authorize_redirect(redirect_uri)
 
 @app.route('/authorize/<name>')
