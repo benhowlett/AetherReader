@@ -2,6 +2,9 @@ from flask import Flask, render_template, request, session, jsonify, Response, s
 from models import db, User, Credential
 from passkey_utils import server, get_registration_options
 import json, requests, os
+from dotenv import load_dotenv
+load_dotenv()
+
 from cloud_services import setup_oauth
 from cloud_bridge import CloudBridge
 
