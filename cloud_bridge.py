@@ -1,4 +1,4 @@
-import requests, os, io
+import requests, os, io, json
 import xml.etree.ElementTree as ET
 
 class CloudBridge:

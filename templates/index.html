@@ -13,6 +13,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 </head>
 <body :class="{ 'dark': isDarkMode }" class="bg-white dark:bg-gray-900 text-black dark:text-white">
+    {% raw %}
     <div id="app" class="container mx-auto p-4">
         <header class="flex justify-between items-center py-6">
             <h1 class="text-2xl font-bold">AetherReader</h1>
@@ -86,14 +87,20 @@
             <div id="viewer" class="flex-grow overflow-hidden"></div>
         </div>
     </div>
+    {% endraw %}
 
     <script>
         const { createApp } = Vue
         createApp({
             data() {
                 return {
-                    isDarkMode: true, // Native dark mode preferred 
-                    isLoggedIn: false
+                    isDarkMode: true,
+                    isLoggedIn: false,
+                    isConnected: false,
+                    files: [],
+                    currentPathSegments: [],
+                    currentlyReading: null,
+                    rendition: null
                 }
             },
             methods: {
@@ -102,24 +109,77 @@
                 },
                 async loginWithPasskey() {
                     const username = prompt("Enter a username:");
+                    if (!username) return;
                     
-                    // 1. Get options from our Flask server
-                    const response = await fetch('/generate-registration-options', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ username })
-                    });
-                    const options = await response.json();
+                    try {
+                        // 1. Get options from Flask
+                        const response = await fetch('/generate-registration-options', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ username })
+                        });
+                        const options = await response.json();
+                        console.log("Registration Options:", options);
 
-                    // 2. Trigger the native Mac/browser Passkey prompt
-                    // This will pop up the Touch ID / Password prompt on your Mac
-                    const credential = await navigator.credentials.create({
-                        publicKey: options
-                    });
+                        // Convert base64url to Uint8Array for the browser
+                        if (options.challenge) options.challenge = this.bufferDecode(options.challenge);
+                        if (options.user && options.user.id) options.user.id = this.bufferDecode(options.user.id);
+                        if (options.excludeCredentials) {
+                            options.excludeCredentials.forEach(c => {
+                                if (c.id) c.id = this.bufferDecode(c.id);
+                            });
+                        }
 
-                    // 3. Send the result back to Flask to verify and save
-                    console.log("Credential created:", credential);
-                    alert("Passkey generated on your device!");
+                        // 2. Create Credential
+                        console.log("Calling navigator.credentials.create...");
+                        const credential = await navigator.credentials.create({
+                            publicKey: options
+                        });
+                        console.log("Credential created:", credential);
+
+                        // 3. Send back to Flask to verify
+                        const verifyResponse = await fetch('/verify-registration', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(this.credentialToJSON(credential))
+                        });
+
+                        const result = await verifyResponse.json();
+                        if (verifyResponse.ok && result.status === 'success') {
+                            alert("Registration successful!");
+                            this.isLoggedIn = true;
+                        } else {
+                            alert("Registration failed: " + (result.message || "Unknown error"));
+                        }
+                    } catch (err) {
+                        console.error("Passkey Error:", err);
+                        alert("Error: " + err.message);
+                    }
+                },
+                // Helpers for WebAuthn binary data
+                bufferDecode(value) {
+                    if (!value) return null;
+                    return Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+                },
+                bufferEncode(value) {
+                    return btoa(String.fromCharCode.apply(null, new Uint8Array(value)))
+                        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+                },
+                credentialToJSON(cred) {
+                    if (cred instanceof Array) {
+                        return cred.map(c => this.credentialToJSON(c));
+                    }
+                    if (cred instanceof ArrayBuffer) {
+                        return this.bufferEncode(cred);
+                    }
+                    if (cred instanceof Object) {
+                        const obj = {};
+                        for (let key in cred) {
+                            obj[key] = this.credentialToJSON(cred[key]);
+                        }
+                        return obj;
+                    }
+                    return cred;
                 },
                 async fetchFiles(path = '/') {
                     const response = await fetch(`/api/browse?path=${encodeURIComponent(path)}`);
@@ -129,15 +189,23 @@
                     if (item.is_folder) {
                         this.fetchFiles(item.path);
                     } else {
-                        // If it's a book, maybe show a preview?
-                        alert("You clicked a book: " + item.name);
+                        this.openBook(item);
                     }
                 },
-                setAsLibrary(folder) {
-                    // Save the folder path to the SQLite DB via a new POST route
-                    console.log("Setting library to:", folder.path);
-                    alert(`Success! AetherReader will now sync with: ${folder.name}`);
-                }
+                async setAsLibrary(folder) {
+                    const response = await fetch('/api/set-library', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ folder_id: folder.path })
+                    });
+
+                    if (response.ok) {
+                        alert(`Success! AetherReader will now sync with: ${folder.name}`);
+                        this.isConnected = true;
+                    } else {
+                        alert("Failed to set library folder.");
+                    }
+                },
                 async openBook(item) {
                     this.currentlyReading = item;
                     const bookUrl = `/api/proxy-book?path=${encodeURIComponent(item.path)}`;

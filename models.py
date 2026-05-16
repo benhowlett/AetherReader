@@ -7,6 +7,10 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     # Store the ID of the folder the user selected in their cloud storage
     cloud_folder_id = db.Column(db.String(255), nullable=True)
+    # Store provider name (google, dropbox, nextcloud)
+    cloud_provider = db.Column(db.String(50), nullable=True)
+    # Store OAuth tokens as JSON: { "google": { "access_token": "...", ... } }
+    tokens = db.Column(db.JSON, default={})
     # Reading progress: stores { "book_id": "current_location" } as JSON
     progress = db.Column(db.JSON, default={})
 
