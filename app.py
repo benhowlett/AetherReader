@@ -13,6 +13,7 @@ app = Flask(__name__)
 # Use absolute path for SQLite to avoid issues with Gunicorn workers
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'aetherreader.db')
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key')
 
 # Production Session Security
@@ -22,15 +23,27 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_PERMANENT=True,
     PERMANENT_SESSION_LIFETIME=2592000, # 30 days
-    PREFERRED_URL_SCHEME='https'
 )
 
 db.init_app(app)
 oauth = setup_oauth(app)
 
 with app.app_context():
-    print(f"DEBUG: Using database at {db_path}")
+    print(f"DEBUG: App started. Database path: {db_path}")
     db.create_all()
+    user_count = User.query.count()
+    cred_count = Credential.query.count()
+    print(f"DEBUG: Current DB state: {user_count} users, {cred_count} credentials")
+
+@app.route('/api/db-status')
+def db_status():
+    users = User.query.all()
+    creds = Credential.query.all()
+    return jsonify({
+        "db_path": db_path,
+        "users": [{"id": u.id, "username": u.username, "creds": len(u.credentials), "provider": u.cloud_provider} for u in users],
+        "total_creds": len(creds)
+    })
 
 @app.route('/')
 def index():
@@ -39,10 +52,11 @@ def index():
 @app.route('/api/auth-options', methods=['POST'])
 def auth_options():
     username = request.json.get('username')
+    print(f"DEBUG: Auth options requested for username: {username}")
     user = User.query.filter_by(username=username).first()
     
     if not user:
-        # User doesn't exist, create one and return registration options
+        print(f"DEBUG: User '{username}' not found. Creating new user.")
         user = User(username=username)
         db.session.add(user)
         db.session.commit()
@@ -53,10 +67,10 @@ def auth_options():
         from passkey_utils import registration_options_to_dict
         return jsonify({"type": "registration", "options": registration_options_to_dict(options)})
     
+    print(f"DEBUG: User '{username}' found. ID: {user.id}. Credentials: {len(user.credentials)}")
     # User exists, check if they have credentials
-    user_creds = Credential.query.filter_by(user_id=user.id).all()
-    if not user_creds:
-        # Exists but no passkey, return registration options
+    if not user.credentials:
+        # Exists but no passkey
         options, state = get_registration_options(user.id, user.username)
         session['registration_state'] = state
         session['registering_user_id'] = user.id
@@ -180,16 +194,22 @@ def authorize(name):
     token = client.authorize_access_token()
     
     user_id = session.get('user_id')
+    print(f"DEBUG: Authorize called for {name}. user_id from session: {user_id}")
     if not user_id:
         return "You must be logged in with a passkey first!", 401
 
     user = User.query.get(user_id)
+    if not user:
+        print(f"DEBUG: User {user_id} not found in DB during authorize!")
+        return "User not found", 404
+        
     # Save token in the tokens JSON column
     user_tokens = dict(user.tokens or {})
     user_tokens[name] = token
     user.tokens = user_tokens
     user.cloud_provider = name
     db.session.commit()
+    print(f"DEBUG: Cloud {name} connected for user {user.username}")
 
     # Automatically close the OAuth popup if one was used
     return 'Cloud storage connected! <script>if(window.opener){window.opener.location.reload(); window.close();}</script>'

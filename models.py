@@ -9,10 +9,13 @@ class User(db.Model):
     cloud_folder_id = db.Column(db.String(255), nullable=True)
     # Store provider name (google, dropbox, nextcloud)
     cloud_provider = db.Column(db.String(50), nullable=True)
-    # Store OAuth tokens as JSON: { "google": { "access_token": "...", ... } }
+    # Store OAuth tokens as JSON
     tokens = db.Column(db.JSON, default={})
-    # Reading progress: stores { "book_id": "current_location" } as JSON
+    # Reading progress
     progress = db.Column(db.JSON, default={})
+
+    # Relationship to credentials
+    credentials = db.relationship('Credential', backref='user_ref', lazy=True)
 
 class Credential(db.Model):
     """ Stores the public key for Passkeys """
