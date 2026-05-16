@@ -18,31 +18,53 @@ class CloudBridge:
 
     def _list_nextcloud(self, path):
         # WebDAV uses the PROPFIND method to list files
-        url = f"{self.instance_url}/remote.php/dav/files/{os.getenv('NEXTCLOUD_USER')}{path}"
+        # Prefix handling: Nextcloud hrefs are usually full paths starting with /remote.php/...
+        base_prefix = f"/remote.php/dav/files/{os.getenv('NEXTCLOUD_USER')}"
+        
+        if path.startswith(base_prefix):
+            full_path = path
+        else:
+            # Ensure path starts with /
+            if not path.startswith('/'): path = '/' + path
+            full_path = f"{base_prefix}{path}"
+            
+        url = f"{self.instance_url}{full_path}"
         headers = {
             'Authorization': f'Bearer {self.token}',
-            'Depth': '1' # Only look in the current folder
+            'Depth': '1'
         }
         response = requests.request('PROPFIND', url, headers=headers)
         
-        # Parse the XML response (Simplified for AetherReader)
+        # Parse the XML response
         items = []
-        root = ET.fromstring(response.content)
-        for response in root.findall('{DAV:}response'):
-            href = response.find('{DAV:}href').text
-            # Basic logic to differentiate folders from files
-            is_dir = href.endswith('/')
-            items.append({
-                "name": href.split('/')[-2 if is_dir else -1],
-                "path": href,
-                "is_folder": is_dir
-            })
-        return items[1:] # Skip the first item as it's the folder itself
+        try:
+            root = ET.fromstring(response.content)
+            for resp in root.findall('{DAV:}response'):
+                href = resp.find('{DAV:}href').text
+                # Basic logic to differentiate folders from files
+                is_dir = href.endswith('/')
+                # Get the last part of the path for the name
+                parts = [p for p in href.split('/') if p]
+                name = parts[-1] if parts else "Root"
+                
+                items.append({
+                    "name": name,
+                    "path": href,
+                    "is_folder": is_dir
+                })
+            return items[1:] # Skip the first item as it's the folder itself
+        except Exception as e:
+            print(f"DEBUG: Nextcloud XML Parse Error: {e}")
+            return []
     
     def get_book_content(self, file_id_or_path):
         """Fetches the actual file data for the reader"""
         if self.provider == 'nextcloud':
-            url = f"{self.instance_url}/remote.php/dav/files/{os.getenv('NEXTCLOUD_USER')}{file_id_or_path}"
+            # Path might already be the full href
+            if file_id_or_path.startswith('/remote.php/'):
+                url = f"{self.instance_url}{file_id_or_path}"
+            else:
+                url = f"{self.instance_url}/remote.php/dav/files/{os.getenv('NEXTCLOUD_USER')}{file_id_or_path}"
             return requests.get(url, headers=self.headers, stream=True)
 
         elif self.provider == 'google':

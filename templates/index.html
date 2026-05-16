@@ -57,7 +57,9 @@
         </div>
 
         <div v-if="isConnected" class="mt-8 bg-gray-50 dark:bg-gray-800 p-6 rounded-xl shadow-inner">
-            <h3 class="text-lg font-bold mb-4">Select your Library Folder</h3>
+            <h3 class="text-lg font-bold mb-4">
+                {{ isLibrarySet ? 'My Library' : 'Select your Library Folder' }}
+            </h3>
             
             <nav class="text-sm mb-4 text-blue-500">
                 <span @click="navigateTo('/')" class="cursor-pointer hover:underline">Root</span>
@@ -102,6 +104,7 @@
                     isLoggedIn: false,
                     isConnected: false,
                     username: '',
+                    isLibrarySet: false,
                     files: [],
                     currentPathSegments: [],
                     currentlyReading: null,
@@ -116,8 +119,10 @@
                     this.isLoggedIn = true;
                     this.username = data.username;
                     this.isConnected = data.isConnected;
+                    this.isLibrarySet = !!data.libraryFolderId;
+                    
                     if (this.isConnected) {
-                        this.fetchFiles();
+                        this.fetchFiles(data.libraryFolderId || '/');
                     }
                 }
             },
@@ -193,7 +198,8 @@
                                 const statusRes = await fetch('/api/user-status');
                                 const statusData = await statusRes.json();
                                 this.isConnected = statusData.isConnected;
-                                if (this.isConnected) this.fetchFiles();
+                                this.isLibrarySet = !!statusData.libraryFolderId;
+                                if (this.isConnected) this.fetchFiles(statusData.libraryFolderId || '/');
                             } else {
                                 alert("Login failed.");
                             }
@@ -231,6 +237,9 @@
                 async fetchFiles(path = '/') {
                     const response = await fetch(`/api/browse?path=${encodeURIComponent(path)}`);
                     this.files = await response.json();
+                    
+                    // Update breadcrumbs - strip WebDAV prefix for display
+                    this.currentPathSegments = path.split('/').filter(p => p && !p.includes('.php') && p !== 'dav' && p !== 'files' && p !== 'ben');
                 },
                 handleItemClick(item) {
                     if (item.is_folder) {
@@ -248,7 +257,8 @@
 
                     if (response.ok) {
                         alert(`Success! AetherReader will now sync with: ${folder.name}`);
-                        this.isConnected = true;
+                        this.isLibrarySet = true;
+                        this.fetchFiles(folder.path);
                     } else {
                         alert("Failed to set library folder.");
                     }

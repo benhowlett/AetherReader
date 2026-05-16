@@ -203,7 +203,8 @@ def user_status():
         "isLoggedIn": True,
         "username": user.username,
         "isConnected": bool(user.cloud_provider),
-        "provider": user.cloud_provider
+        "provider": user.cloud_provider,
+        "libraryFolderId": user.cloud_folder_id
     })
 
 @app.route('/api/logout', methods=['POST'])
