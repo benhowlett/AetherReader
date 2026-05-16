@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fido2.server import Fido2Server
 from fido2.webauthn import PublicKeyCredentialRpEntity
 from fido2.utils import websafe_encode, websafe_decode
