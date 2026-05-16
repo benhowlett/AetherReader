@@ -265,28 +265,61 @@
                 },
                 async openBook(item) {
                     this.currentlyReading = item;
+                    console.log("Opening book:", item.name, "Path:", item.path);
+                    
                     const bookUrl = `/api/proxy-book?path=${encodeURIComponent(item.path)}`;
                     
-                    if (item.name.endsWith('.epub')) {
-                        this.rendition = ePub(bookUrl).renderTo("viewer", {
-                            width: "100%",
-                            height: "100%",
-                            flow: "paginated"
-                        });
-                        
-                        // Load saved progress from your SQLite DB
-                        const savedLocation = await this.getSavedProgress(item.path);
-                        this.rendition.display(savedLocation);
+                    if (item.name.toLowerCase().endsWith('.epub')) {
+                        try {
+                            const book = ePub(bookUrl);
+                            this.rendition = book.renderTo("viewer", {
+                                width: "100%",
+                                height: "100%",
+                                flow: "paginated",
+                                manager: "default"
+                            });
+                            
+                            // Get saved progress
+                            const savedLocation = await this.getSavedProgress(item.path);
+                            console.log("Displaying at location:", savedLocation);
+                            
+                            await this.rendition.display(savedLocation || undefined);
+                            console.log("Rendition displayed.");
 
-                        // Track progress as you read
-                        this.rendition.on("relocated", (location) => {
-                            this.saveProgress(item.path, location.start.cfi);
-                        });
+                            this.rendition.on("relocated", (location) => {
+                                this.saveProgress(item.path, location.start.cfi);
+                            });
+                            
+                            this.rendition.on("error", (err) => {
+                                console.error("EpubJS Error:", err);
+                            });
+
+                        } catch (err) {
+                            console.error("Failed to load EPUB:", err);
+                            alert("Error loading book: " + err.message);
+                        }
                     }
                 },
+                prevPage() {
+                    if (this.rendition) this.rendition.prev();
+                },
+                nextPage() {
+                    if (this.rendition) this.rendition.next();
+                },
                 closeReader() {
-                    if (this.rendition) this.rendition.destroy();
+                    if (this.rendition) {
+                        this.rendition.destroy();
+                        this.rendition = null;
+                    }
                     this.currentlyReading = null;
+                },
+                async getSavedProgress(bookPath) {
+                    // Placeholder for now
+                    return null;
+                },
+                async saveProgress(bookPath, cfi) {
+                    console.log("Saving progress:", cfi);
+                    // TODO: Implement backend save
                 }
             }
         }).mount('#app')

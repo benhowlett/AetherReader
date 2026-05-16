@@ -1,5 +1,6 @@
 import requests, os, io, json
 import xml.etree.ElementTree as ET
+from urllib.parse import unquote
 
 class CloudBridge:
     def __init__(self, token, provider, instance_url=None):
@@ -40,7 +41,8 @@ class CloudBridge:
         try:
             root = ET.fromstring(response.content)
             for resp in root.findall('{DAV:}response'):
-                href = resp.find('{DAV:}href').text
+                # unquote to handle %20 etc.
+                href = unquote(resp.find('{DAV:}href').text)
                 # Basic logic to differentiate folders from files
                 is_dir = href.endswith('/')
                 # Get the last part of the path for the name
@@ -103,4 +105,3 @@ class CloudBridge:
                 "path": f['path_lower'],
                 "is_folder": f['.tag'] == 'folder'
             } for f in res.get('entries', [])]
-    
